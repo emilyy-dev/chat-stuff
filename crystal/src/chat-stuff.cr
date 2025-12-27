@@ -2,7 +2,8 @@ require "./chat-stuff/openssl"
 require "./proto/*"
 
 module Chatty
-  VERSION = "0.1.0"
+  MAGIC = 0xea68u16
+  VERSION = 0u16
 
   include OpenSSL
 
