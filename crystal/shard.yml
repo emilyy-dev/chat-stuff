@@ -13,6 +13,7 @@ dependencies:
     github: spider-gazelle/openssl_ext
   protobuf:
     github: jeromegn/protobuf.cr
+    commit: 44ea962d1b18c5a7d644c6e1944dff6ef5bd475a
 
 crystal: 1.5.0
 

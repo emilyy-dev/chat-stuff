@@ -6,5 +6,5 @@ shards:
 
   protobuf:
     git: https://github.com/jeromegn/protobuf.cr.git
-    version: 2.3.1
+    version: 2.3.1+git.commit.44ea962d1b18c5a7d644c6e1944dff6ef5bd475a
 

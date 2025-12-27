@@ -8,7 +8,7 @@ module Chatty
       include ::Protobuf::Message
       
       contract_of "proto3" do
-        optional :deny_reason, :string, 2
+        optional :deny_reason, :string, 1
       end
     end
     
