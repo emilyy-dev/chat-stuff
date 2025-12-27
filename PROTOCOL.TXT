@@ -11,6 +11,9 @@
 
 ------------------------------------------- CLIENT/SERVER PROTOCOL HANDSHAKE -------------------------------------------
 
+  Magic protocol number: 0xea68
+  Current protocol version: 0
+
   Server listens for TCP connections, client connects to the server and sends the magic protocol number (uint16) and
 protocol version (uint16), server accepts the connection and checks for the received magic protocol number and protocol
 version:
