@@ -4,3 +4,4 @@ build
 /crystal/lib/
 /crystal/bin/
 /crystal/.shards/
+/crystal/key.pem

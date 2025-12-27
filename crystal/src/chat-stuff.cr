@@ -7,7 +7,19 @@ module Chatty
 
   include OpenSSL
 
-  msg = Message::Hello.new(key_xchg_public_key: PKey::X25519.generate.public_key_bytes)
+  if File.exists?("key.pem")
+    key = File.open("key.pem") do |f|
+      PKey.read f
+    end
+  else
+    key = PKey::RSA.new(4096)
+    File.open("key.pem", "w") do |f|
+      key.to_pem f
+    end
+  end
+
+  p! key.x509_public
+  msg = Message::RegisterRequest.new(username: "rymiel", public_signing_key: key.x509_public)
   io = IO::Memory.new
   msg.to_protobuf(io)
   p! io.to_slice.hexstring
