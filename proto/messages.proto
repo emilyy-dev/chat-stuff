@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package chat.stuffs.proto;
+
+import "register.proto";
+import "account_status.proto";
+import "message_request.proto";
+
+message Request {
+  uint64 id = 1;
+  oneof request {
+    RegisterRequest register = 2;
+    MessageRequest message = 3;
+    AccountStatusRequest account_status = 4;
+  }
+}
+
+message Response {
+  uint64 id = 1;
+  oneof response {
+    RegisterResponse register = 2;
+    MessageResponse message = 3;
+    AccountStatusResponse account_status = 4;
+  }
+}

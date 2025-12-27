@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package chat.stuffs.proto;
+
+message AccountStatusRequest {
+  string username = 1;
+  bytes signature = 2;
+}
+
+message AccountStatusResponse {
+}

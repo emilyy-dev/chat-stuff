@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package chat.stuffs.proto;
+
+message RegisterRequest {
+  string username = 1;
+  bytes public_signing_key = 2;
+}
+
+message RegisterResponse {
+  oneof registration_status {
+    string error_message = 1;
+  }
+}

@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package chat.stuffs.proto;
+
+import "handshake.proto";
+
+message MessageRequest {
+  string recipient = 1;
+}
+
+message MessageResponse {
+  oneof response {
+    string error_message = 1;
+    Hello hello = 2;
+  }
+}

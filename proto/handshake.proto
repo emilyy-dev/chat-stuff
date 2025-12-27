@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package chat.stuffs.proto;
+
+message AcceptStatus {
+  optional string deny_reason = 2;
+}
+
+message Hello {
+  bytes key_xchg_public_key = 1;
+  bytes key_xchg_public_key_signature = 2;
+  bytes nonce = 3;
+  bytes nonce_signature = 4;
+}
+
