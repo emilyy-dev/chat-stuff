@@ -1,0 +1,19 @@
+name: chat-stuff
+version: 0.1.0
+
+authors:
+  - Emilia Kond <emilia@rymiel.space>
+
+targets:
+  chat-stuff:
+    main: src/chat-stuff.cr
+
+dependencies:
+  openssl_ext:
+    github: spider-gazelle/openssl_ext
+  protobuf:
+    github: jeromegn/protobuf.cr
+
+crystal: 1.5.0
+
+license: MIT
