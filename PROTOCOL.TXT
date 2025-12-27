@@ -15,19 +15,19 @@
 protocol version (uint16), server accepts the connection and checks for the received magic protocol number and protocol
 version:
   * If the magic number does not match the connection is immediately closed.
-  * Otherwise if the protocol version does not match the server sends a accept_status message with success = false and
-    an appropriately descriptive deny_reason field, then it closes the connection.
-  * Otherwise the server sends a accept_status message with success = true and no deny_reason field
-    (NOT an empty string) and awaits for the client to send a hello message.
+  * Otherwise if the protocol version does not match the server sends a AcceptStatus message with an appropriately
+    descriptive deny_reason field, then it closes the connection.
+  * Otherwise the server sends a AcceptStatus message with no deny_reason field (NOT an empty string) and awaits for the
+    client to send a Hello message.
 
 ------------------------------------------ ENCRYPTION HANDSHAKE BETWEEN PEERS ------------------------------------------
 
   Party 1 (Alice) generates a fresh keypair (X25519) used for generating a secret key (256-bit AES) and a random nonce
-as it wishes to perform a handshake with Party 2 (Bob) and sends a hello message with the generated public key for the
+as it wishes to perform a handshake with Party 2 (Bob) and sends a Hello message with the generated public key for the
 secret key agreement procedure, its signature, the random nonce, and its signature.
 
   Bob generates a fresh keypair (X25519) used for generating a secret key (256-bit AES) and a random nonce as it wishes
-to accept and perform the handshake with Alice, receives Bob's hello message and sends back a hello message with the
+to accept and perform the handshake with Alice, receives Bob's Hello message and sends back a Hello message with the
 generated public key for the secret agreement procedure, its signature, the random nonce, and its signature.
 
   Once that happens, both peers via KeyAgreement (X25519) using their private key from the freshly-generated keypair and
@@ -43,9 +43,9 @@ Those keys and IVs are used to create ciphers (AES_256):
   * a remote cipher used to encrypt outgoing messages
 
   Every future message that is sent and received from either party is encrypted and decrypted using the corresponding
-cipher. Every future message that is sent to the other party is to be wrapped in a request message with a
-unique ID (uint64) for that message, and every request message that requires a response is to be wrapped in a response
-message with the same ID. Note that the ID is not required to be globally unique, it is only to be unique between the
-current communication session between the two peers, as the IDs are entirely ephemeral to the *direction* of the current
-session (that is, if Alice sends Bob a request message with ID 123, Bob is allowed to send its own unrelated request
+cipher. Every future message that is sent to the other party is to be wrapped in a Request message with a unique ID
+(uint64) for that message, and every request that requires a response is to be wrapped in a Response message with the
+same ID. Note that the ID is not required to be globally unique, it is only to be unique in the current communication
+session between the two peers, as the IDs are entirely ephemeral to the *direction* of the current session (that is, if
+Alice sends Bob a request message with ID 123, Bob is allowed to send its own unrelated request
 message with ID 123).
