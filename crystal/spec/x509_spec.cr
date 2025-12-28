@@ -84,4 +84,8 @@ describe "x509" do
     pkey = RSA.new X509_PUBLIC_PEM
     pkey.x509_public.should eq X509_PUBLIC_DER
   end
+  it "converts back public key" do
+    pkey = RSA.from_x509_public X509_PUBLIC_DER
+    pkey.to_pem.should eq X509_PUBLIC_PEM
+  end
 end
