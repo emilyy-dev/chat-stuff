@@ -5,3 +5,4 @@ build
 /crystal/bin/
 /crystal/.shards/
 /crystal/key.pem
+/crystal/src/proto/
