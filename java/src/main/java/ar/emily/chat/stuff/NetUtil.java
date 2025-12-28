@@ -2,11 +2,13 @@ package ar.emily.chat.stuff;
 
 import java.io.EOFException;
 import java.io.IOException;
-import java.lang.reflect.UndeclaredThrowableException;
 import java.nio.ByteBuffer;
 import java.nio.channels.ReadableByteChannel;
 import java.time.Duration;
-import java.util.concurrent.StructuredTaskScope;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class NetUtil {
 
@@ -25,32 +27,32 @@ public final class NetUtil {
     return dst.flip();
   }
 
-  @SuppressWarnings("preview")
   public static int readWithTimeout(final ReadableByteChannel ch, final Duration timeout, final ByteBuffer dst)
       throws IOException {
-    try (
-        final var scope =
-            StructuredTaskScope.open(StructuredTaskScope.Joiner.awaitAll(), cfg -> cfg.withTimeout(timeout))
-    ) {
-      try {
-        final StructuredTaskScope.Subtask<Integer> readTask = scope.fork(() -> ch.read(dst));
-        scope.join();
-        if (readTask.state() == StructuredTaskScope.Subtask.State.SUCCESS) {
-          return readTask.get();
-        } else if (readTask.state() == StructuredTaskScope.Subtask.State.FAILED) {
-          switch (readTask.exception()) {
-            case final IOException ex -> throw ex;
-            case final RuntimeException ex -> throw ex;
-            case final Error ex -> throw ex;
-            case final Throwable ex -> throw new UndeclaredThrowableException(ex);
-          }
-        } else {
-          throw new IllegalStateException();
-        }
-      } catch (final InterruptedException _) {
-        Thread.currentThread().interrupt();
-        return -1;
+    final Thread reader = Thread.currentThread();
+    final var completed = new AtomicBoolean();
+    final ScheduledFuture<?> timeoutFuture =
+        ForkJoinPool.commonPool().schedule(
+            () -> {
+              if (completed.compareAndSet(false, true)) {
+                reader.interrupt();
+              }
+            },
+            TimeUnit.NANOSECONDS.convert(timeout),
+            TimeUnit.NANOSECONDS
+        );
+
+    try {
+      final int read = ch.read(dst);
+      if (!completed.compareAndSet(false, true)) {
+        // clear interrupt status in case read op completed normally but timeout task ran between that and the CAS op
+        Thread.interrupted();
       }
+
+      return read;
+    } finally {
+      completed.set(true);
+      timeoutFuture.cancel(false);
     }
   }
 

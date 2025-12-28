@@ -75,11 +75,6 @@ public final class ServerMain {
   }
 
   private KeyPair loadSigningKeyPair(final Path keyStorePath, final String[] args) throws IOException {
-    if (true) {
-      LOGGER.info("Generating new signing keypair...");
-      return CryptoUtil.signatureKeyPairGenerator(new SecureRandom()).generateKeyPair();
-    }
-
     if (Files.notExists(keyStorePath)) {
       LOGGER.warn("Keystore file does not exist, generating brand new signing keypair and saving it");
       final char[] keyStorePassword = findOrRequestKeyStorePassword(args);
@@ -90,14 +85,23 @@ public final class ServerMain {
       }
 
       LOGGER.info("Generating new signing keypair...");
-      final KeyPair signingKeyPair = CryptoUtil.signatureKeyPairGenerator(null).generateKeyPair();
-      try (final var out = Files.newOutputStream(keyStorePath)) {
+      final KeyPair signingKeyPair = CryptoUtil.signatureKeyPairGenerator(RANDOM_SOURCE).generateKeyPair();
+      try (final var out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(keyStorePath)))) {
+        // TODO: password-protect
+        final KeyFactory signingKeyFactory = CryptoUtil.signingKeyFactory();
+        byte[] bs = CryptoUtil.encodePrivateKey(signingKeyFactory, signingKeyPair.getPrivate());
+        out.writeInt(bs.length);
+        out.write(bs);
+        bs = CryptoUtil.encodePublicKey(signingKeyFactory, signingKeyPair.getPublic());
+        out.writeInt(bs.length);
+        out.write(bs);
         return signingKeyPair;
       } finally {
         Arrays.fill(keyStorePassword, '\0');
       }
     }
 
+    LOGGER.info("Loading signing keypair from existing keystore...");
     final char[] keyStorePassword = findOrRequestKeyStorePassword(args);
     if (keyStorePassword == null) {
       LOGGER.error("No keystore password specified, server will now shut down");
@@ -105,8 +109,20 @@ public final class ServerMain {
       throw new RuntimeException(); // never reached
     }
 
-    try {
-      return null;
+    try (final var in = new DataInputStream(new BufferedInputStream(Files.newInputStream(keyStorePath)))) {
+      // TODO: password-protect
+      final KeyFactory signingKeyFactory = CryptoUtil.signingKeyFactory();
+      byte[] bs = new byte[in.readInt()];
+      in.readFully(bs);
+      final PrivateKey privateKey = CryptoUtil.decodePrivateKey(signingKeyFactory, bs);
+
+      bs = new byte[in.readInt()];
+      in.readFully(bs);
+      final PublicKey publicKey = CryptoUtil.decodePublicKey(signingKeyFactory, bs);
+
+      return new KeyPair(publicKey, privateKey);
+    } catch (final InvalidKeySpecException ex) {
+      throw new RuntimeException(ex);
     } finally {
       Arrays.fill(keyStorePassword, '\0');
     }

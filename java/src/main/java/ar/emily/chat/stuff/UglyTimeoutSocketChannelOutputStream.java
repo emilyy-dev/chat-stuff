@@ -2,11 +2,13 @@ package ar.emily.chat.stuff;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.lang.reflect.UndeclaredThrowableException;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.time.Duration;
-import java.util.concurrent.StructuredTaskScope;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 class UglyTimeoutSocketChannelOutputStream extends OutputStream {
 
@@ -36,26 +38,29 @@ class UglyTimeoutSocketChannelOutputStream extends OutputStream {
     }
   }
 
-  @SuppressWarnings("preview")
   void writeWithTimeout0(final ByteBuffer src) throws IOException {
-    try (
-        final var scope =
-            StructuredTaskScope.open(StructuredTaskScope.Joiner.awaitAll(), cfg -> cfg.withTimeout(this.timeout))
-    ) {
-      try {
-        final StructuredTaskScope.Subtask<Integer> readTask = scope.fork(() -> this.ch.write(src));
-        scope.join();
-        if (readTask.state() == StructuredTaskScope.Subtask.State.FAILED) {
-          switch (readTask.exception()) {
-            case final IOException ex -> throw ex;
-            case final RuntimeException ex -> throw ex;
-            case final Error ex -> throw ex;
-            case final Throwable ex -> throw new UndeclaredThrowableException(ex);
-          }
-        }
-      } catch (final InterruptedException _) {
-        Thread.currentThread().interrupt();
+    final Thread writer = Thread.currentThread();
+    final var completed = new AtomicBoolean();
+    final ScheduledFuture<?> timeoutFuture =
+        ForkJoinPool.commonPool().schedule(
+            () -> {
+              if (completed.compareAndSet(false, true)) {
+                writer.interrupt();
+              }
+            },
+            TimeUnit.NANOSECONDS.convert(this.timeout),
+            TimeUnit.NANOSECONDS
+        );
+
+    try {
+      this.ch.write(src);
+      if (!completed.compareAndSet(false, true)) {
+        // clear interrupt status in case write op completed normally but timeout task ran between that and the CAS op
+        Thread.interrupted();
       }
+    } finally {
+      completed.set(true);
+      timeoutFuture.cancel(false);
     }
   }
 }
