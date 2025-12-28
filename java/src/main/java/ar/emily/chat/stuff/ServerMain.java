@@ -18,6 +18,7 @@ public final class ServerMain {
 
   private static final Duration READ_WRITE_TIMEOUT = Duration.ofSeconds(10L);
   private static final ScopedValue<ServerInfo> SERVER_INFO = ScopedValue.newInstance();
+  private static final ScopedValue<SocketAddress> CLIENT_ADDRESS = ScopedValue.newInstance();
   private static final SecureRandom RANDOM_SOURCE;
 
   static {
@@ -86,16 +87,14 @@ public final class ServerMain {
 
       LOGGER.info("Generating new signing keypair...");
       final KeyPair signingKeyPair = CryptoUtil.signatureKeyPairGenerator(RANDOM_SOURCE).generateKeyPair();
-      try (final var out = new DataOutputStream(new BufferedOutputStream(Files.newOutputStream(keyStorePath)))) {
-        // TODO: password-protect
-        final KeyFactory signingKeyFactory = CryptoUtil.signingKeyFactory();
-        byte[] bs = CryptoUtil.encodePrivateKey(signingKeyFactory, signingKeyPair.getPrivate());
-        out.writeInt(bs.length);
-        out.write(bs);
-        bs = CryptoUtil.encodePublicKey(signingKeyFactory, signingKeyPair.getPublic());
-        out.writeInt(bs.length);
-        out.write(bs);
+      final KeyStore keyStore = KeyStore.empty();
+      try (final var out = new BufferedOutputStream(Files.newOutputStream(keyStorePath))) {
+        keyStore.addPrivateKey("signing-private", keyStorePassword, signingKeyPair.getPrivate());
+        keyStore.addPublicKey("signing-public", null, signingKeyPair.getPublic());
+        keyStore.storeTo(out);
         return signingKeyPair;
+      } catch (final InvalidKeyException ex) {
+        throw new RuntimeException(ex);
       } finally {
         Arrays.fill(keyStorePassword, '\0');
       }
@@ -109,19 +108,14 @@ public final class ServerMain {
       throw new RuntimeException(); // never reached
     }
 
-    try (final var in = new DataInputStream(new BufferedInputStream(Files.newInputStream(keyStorePath)))) {
-      // TODO: password-protect
-      final KeyFactory signingKeyFactory = CryptoUtil.signingKeyFactory();
-      byte[] bs = new byte[in.readInt()];
-      in.readFully(bs);
-      final PrivateKey privateKey = CryptoUtil.decodePrivateKey(signingKeyFactory, bs);
-
-      bs = new byte[in.readInt()];
-      in.readFully(bs);
-      final PublicKey publicKey = CryptoUtil.decodePublicKey(signingKeyFactory, bs);
-
+    try (final var in = new BufferedInputStream(Files.newInputStream(keyStorePath))) {
+      final KeyStore keyStore = KeyStore.loadFrom(in);
+      final PrivateKey privateKey =
+          keyStore.getPrivateKey("signing-private", CryptoUtil.SIGNATURE_KEY_ALGO, keyStorePassword);
+      final PublicKey publicKey = keyStore.getPublicKey("signing-public", CryptoUtil.SIGNATURE_KEY_ALGO, null);
+      // TODO: null-check keys? what to do
       return new KeyPair(publicKey, privateKey);
-    } catch (final InvalidKeySpecException ex) {
+    } catch (final NoSuchAlgorithmException | InvalidKeyException ex) {
       throw new RuntimeException(ex);
     } finally {
       Arrays.fill(keyStorePassword, '\0');
@@ -133,14 +127,19 @@ public final class ServerMain {
     final KeyPair signingKeyPair = loadSigningKeyPair(findKeyStorePath(args), args);
     LOGGER.info("Public signing key:\n{}", PEMEncoder.of().encodeToString(signingKeyPair.getPublic()));
 
-    try (final var scope = StructuredTaskScope.open()) {
+    try (final var scope = StructuredTaskScope.open(new AnySubtaskJoiner<>())) {
       try (final var serverChannel = ServerSocketChannel.open()) {
         LOGGER.info("Bound to {}", serverChannel.bind(new InetSocketAddress(39615)).getLocalAddress());
         final ServerInfo serverInfo = new ServerInfo(serverChannel, signingKeyPair.getPublic(), signingKeyPair.getPrivate());
         scope.fork(() -> ScopedValue.where(SERVER_INFO, serverInfo).run(this::serverAcceptLoop));
-        new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))
-            .lines().anyMatch(Predicate.isEqual("shutdown").or(Objects::isNull));
-        LOGGER.info("Shutting down...");
+
+        scope.fork(() -> {
+          new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))
+              .lines().anyMatch(Predicate.isEqual("shutdown").or(Objects::isNull));
+          LOGGER.info("Shutting down...");
+        });
+
+        scope.join();
       } catch (final IOException ex) {
         try {
           scope.join();
@@ -150,8 +149,6 @@ public final class ServerMain {
 
         throw ex;
       }
-
-      scope.join();
     }
   }
 
@@ -165,21 +162,7 @@ public final class ServerMain {
           scope.fork(() -> acceptClient(client));
         }
       } catch (final ClosedByInterruptException _) {
-        LOGGER.info("No new connections will be accepted");
-      } catch (final AsynchronousCloseException _) {
-        try {
-          LOGGER.info("No new connections will be accepted");
-          scope.join();
-        } catch (final InterruptedException _) {
-          Thread.currentThread().interrupt();
-        }
       } catch (final IOException ex) {
-        try {
-          scope.join();
-        } catch (final InterruptedException _) {
-          Thread.currentThread().interrupt();
-        }
-
         throw new UncheckedIOException(ex);
       }
     }
@@ -190,12 +173,20 @@ public final class ServerMain {
     try (client) {
       remoteAddress = client.getRemoteAddress();
       LOGGER.debug("New client from {}", remoteAddress);
-      handleClient(client);
+      ScopedValue.where(CLIENT_ADDRESS, remoteAddress).call(() -> {
+        handleClient(client);
+        return null;
+      });
+
       LOGGER.debug("Disconnecting client {}", remoteAddress);
-    } catch (final StructuredTaskScope.TimeoutException ex) {
-      LOGGER.debug("Read timeout for {}", remoteAddress, ex);
+    } catch (final ClosedByInterruptException _) {
+    } catch (final ReadTimeoutException _) {
+      LOGGER.debug("Read timeout for {}", remoteAddress);
+    } catch (final WriteTimeoutException _) {
+      LOGGER.debug("Write timeout for {}", remoteAddress);
     } catch (final Exception ex) {
-      LOGGER.error("Unexpected error handling client {}", remoteAddress, ex);
+      LOGGER.error("Unexpected error handling client {}: {}", remoteAddress, ex.getMessage());
+      LOGGER.debug(null, ex);
     }
   }
 
@@ -276,7 +267,7 @@ public final class ServerMain {
     final InputStream cipherIn = new CipherInputStream(in, decryptCipher);
     final OutputStream cipherOut = new CipherOutputStream(out, encryptCipher);
     while (true) {
-      if (readRequestMessage(cipherIn, cipherOut)) {
+      if (!readRequestMessage(cipherIn, cipherOut)) {
         break;
       }
     }
@@ -303,7 +294,13 @@ public final class ServerMain {
         yield true;
       }
 
-      case DISCONNECT -> false;
+      case DISCONNECT -> {
+        final SocketAddress clientAddress = CLIENT_ADDRESS.get();
+        final String reason = request.getDisconnect().getReason();
+        LOGGER.info("Client {} disconnected with reason: {}", clientAddress, reason);
+        yield false;
+      }
+
       case REQUEST_NOT_SET -> {
         Messages.Response.newBuilder()
             .setId(request.getId())
@@ -316,5 +313,32 @@ public final class ServerMain {
   }
 
   private record ServerInfo(ServerSocketChannel ch, PublicKey signingPublicKey, PrivateKey signingPrivateKey) {
+  }
+
+  private static final class AnySubtaskJoiner<T> implements StructuredTaskScope.Joiner<T, T> {
+
+    private volatile T result;
+    private volatile @Nullable Throwable exception;
+
+    @Override
+    public boolean onComplete(final StructuredTaskScope.Subtask<? extends T> subtask) {
+      if (subtask.state() == StructuredTaskScope.Subtask.State.SUCCESS) {
+        this.result = subtask.get();
+      } else if (subtask.state() == StructuredTaskScope.Subtask.State.FAILED) {
+        this.exception = subtask.exception();
+      }
+
+      return true;
+    }
+
+    @Override
+    public T result() throws Throwable {
+      final Throwable ex = this.exception;
+      if (ex != null) {
+        throw ex;
+      } else {
+        return this.result;
+      }
+    }
   }
 }

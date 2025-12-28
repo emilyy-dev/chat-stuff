@@ -3,6 +3,7 @@ package ar.emily.chat.stuff;
 import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.ReadableByteChannel;
 import java.time.Duration;
 import java.util.concurrent.ForkJoinPool;
@@ -50,6 +51,13 @@ public final class NetUtil {
       }
 
       return read;
+    } catch (final ClosedByInterruptException ex) {
+      if (!completed.compareAndSet(false, true)) {
+        Thread.interrupted(); // clear interrupt flag in case of read timeout
+        throw new ReadTimeoutException();
+      } else {
+        throw ex;
+      }
     } finally {
       completed.set(true);
       timeoutFuture.cancel(false);

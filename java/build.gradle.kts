@@ -32,6 +32,13 @@ tasks {
   compileJava {
     options.compilerArgs = listOf("--enable-preview")
   }
+
+  named<JavaExec>("run") {
+    systemProperty("chat.stuff.keystore.password", "meow meow meow")
+    standardInput = System.`in`
+    workingDir = project.file("run")
+    doFirst { workingDir.mkdirs() }
+  }
 }
 
 sourceSets {

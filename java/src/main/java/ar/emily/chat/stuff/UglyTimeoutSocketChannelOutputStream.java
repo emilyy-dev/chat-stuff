@@ -3,6 +3,7 @@ package ar.emily.chat.stuff;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.SocketChannel;
 import java.time.Duration;
 import java.util.concurrent.ForkJoinPool;
@@ -57,6 +58,13 @@ class UglyTimeoutSocketChannelOutputStream extends OutputStream {
       if (!completed.compareAndSet(false, true)) {
         // clear interrupt status in case write op completed normally but timeout task ran between that and the CAS op
         Thread.interrupted();
+      }
+    } catch (final ClosedByInterruptException ex) {
+      if (!completed.compareAndSet(false, true)) {
+        Thread.interrupted(); // clear interrupt flag in case of read timeout
+        throw new WriteTimeoutException();
+      } else {
+        throw ex;
       }
     } finally {
       completed.set(true);

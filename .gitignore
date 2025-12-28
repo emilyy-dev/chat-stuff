@@ -1,6 +1,7 @@
 .gradle
 .idea
 build
+/java/run
 /crystal/lib/
 /crystal/bin/
 /crystal/.shards/

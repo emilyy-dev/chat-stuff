@@ -29,9 +29,8 @@ import java.util.HexFormat;
 
 public final class CryptoUtil {
 
-  private static final String SIGNATURE_KEY_ALGO = "RSA";
+  static final String SIGNATURE_KEY_ALGO = "RSA";
   private static final String KEY_EXCHANGE_ALGO = "X25519";
-  private static final String SIGNING_CIPHER_ALGO = "PBEWithHmacSHA512AndAES_256";
   private static final String CIPHER_TRANS = "AES/CFB8/NoPadding";
   private static final String SIGNER_ALGO = "SHA3-512withRSA";
   private static final String KEY_AGREEMENT_ALGO = KEY_EXCHANGE_ALGO;
