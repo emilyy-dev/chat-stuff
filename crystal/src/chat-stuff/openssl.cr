@@ -43,9 +43,10 @@ lib LibCrypto
 end
 
 module OpenSSL::HKDF
-  def self.derive(algo : Algorithm, size : UInt64, salt : Bytes, secret : Bytes, label : Bytes) : Bytes
-    # unsigned char out[10];
-    # size_t outlen = sizeof(out);
+  def self.derive(algo : Algorithm, size : UInt64, salt, secret, label) : Bytes
+    salt = salt.to_slice
+    secret = secret.to_slice
+    label = label.to_slice
     buffer = Bytes.new(size)
     pctx = LibCrypto.evp_pkey_ctx_new_id(LibCrypto::EVP_PKEY_HKDF, nil)
     raise OpenSSL::Error.new("EVP_PKEY_CTX_new_id failed") if pctx.null?

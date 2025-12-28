@@ -1,4 +1,6 @@
 require "./chat-stuff/openssl"
+require "./chat-stuff/io"
+require "./chat-stuff/server_db"
 require "./proto/*"
 
 module Chatty
@@ -7,39 +9,21 @@ module Chatty
 
   include OpenSSL
 
-  class CipherStreamIO < IO
-    getter read_cipher : Cipher
-    getter write_cipher : Cipher
-
-    def initialize(@io : IO, cipher_method : String, local_iv : Bytes, local_key : Bytes, remote_iv : Bytes, remote_key : Bytes)
-      @read_cipher = Cipher.new cipher_method
-      @read_cipher.decrypt
-      @read_cipher.key = local_key
-      @read_cipher.iv = local_iv
-      @write_cipher = Cipher.new cipher_method
-      @write_cipher.encrypt
-      @write_cipher.key = remote_key
-      @write_cipher.iv = remote_iv
+  def self.load_or_generate_key(file = "key.pem")
+    if File.exists?(file)
+      key = File.open(file) do |f|
+        PKey::RSA.new f
+      end
+    else
+      key = PKey::RSA.new(4096)
+      File.open(file, "w") do |f|
+        key.to_pem f
+      end
     end
-
-    def read(slice : Bytes)
-      upstream_size = @io.read slice
-      upstream = slice[0, upstream_size]
-      o = @read_cipher.update upstream
-      slice.copy_from o
-      upstream_size
-    end
-
-    def write(slice : Bytes) : Nil
-      @io.write @write_cipher.update(slice)
-    end
-
-    def flush
-      @io.flush
-    end
+    return key
   end
 
-  def self.fingerprint(key : PKey::RSA)
+  def self.fingerprint(key : PKey::PKey)
     md5 = Digest::MD5.digest(key.x509_public)
     flag = false
     String.build do |str|
@@ -51,98 +35,133 @@ module Chatty
     end
   end
 
-  def self.write_sized(t : T, io : IO) forall T
-    buf = t.to_protobuf
-    Protobuf::Buffer.new(io).write_int32(buf.size)
-    io.write buf.to_slice
-    io.flush
-  end
+  class Client
+    Log = ::Log.for "client"
+    getter sign_key : PKey::RSA
+    @server : KnownServer
+    getter socket : TCPSocket
 
-  def self.read_sized(t : T.class, io : IO) forall T
-    size = Protobuf::Buffer.new(io).read_uint32.not_nil!
-    t.from_protobuf(IO::Sized.new(io, size))
-  end
-
-  if File.exists?("key.pem")
-    sign_key = File.open("key.pem") do |f|
-      PKey::RSA.new f
+    def initialize(@sign_key, @server)
+      @socket = TCPSocket.new
     end
-  else
-    sign_key = PKey::RSA.new(4096)
-    File.open("key.pem", "w") do |f|
-      sign_key.to_pem f
+
+    def connect : Connection
+      Log.info { "using signing key #{Chatty.fingerprint @sign_key}" }
+      Log.info { "connecting to #{@server.name} (#{@server.ip})" }
+      @socket.connect @server.ip
+      Log.notice { "Connected to server" }
+      @socket.write_bytes(MAGIC, IO::ByteFormat::NetworkEndian)
+      @socket.write_bytes(VERSION, IO::ByteFormat::NetworkEndian)
+      accept = @socket.read_protobuf_sized(Message::AcceptStatus)
+      if deny = accept.deny_reason
+        Log.error { "Server rejected us: #{deny}" }
+        raise IO::Error.new(deny)
+      end
+
+      Connection.new self
+    end
+
+    def sign_sha3_512(bytes : Bytes) : Bytes
+      @sign_key.sign(Digest::SHA3_512.new, bytes)
+    end
+
+    def verify_sha3_512(signature : Bytes, data : Bytes) : Bool
+      @server.sign_pub_key.verify(Digest::SHA3_512.new, signature, data)
+    end
+
+    def close
+      @socket.close
     end
   end
-  puts "Using signing key #{fingerprint(sign_key)}"
 
-  server_ip = gets.not_nil!
-  server_port = gets.not_nil!.to_i32
-  server = TCPSocket.new(server_ip, server_port)
-  puts "Connected"
-  client = IO::Hexdump.new(server, read: true, write: true)
-  client.write_bytes(MAGIC, IO::ByteFormat::NetworkEndian)
-  client.write_bytes(VERSION, IO::ByteFormat::NetworkEndian)
+  class Connection
+    Log = ::Log.for "connect"
+    @client : Client
+    @xchg : PKey::X25519
+    getter! cipher : CipherStreamIO
 
-  fresh = PKey::X25519.generate
+    def initialize(@client)
+      @xchg = PKey::X25519.generate
+    end
 
-  puts "Fresh public key"
-  puts fresh.x509_public.hexstring
-  fresh_signature = sign_key.sign(Digest::SHA3_512.new, fresh.x509_public)
-  puts "Fresh public key signature"
-  puts fresh_signature.hexstring
+    def io : IO
+      cipher
+    end
 
-  nonce = Random::Secure.random_bytes 16
-  puts "Nonce"
-  puts nonce.hexstring
-  nonce_signature = sign_key.sign(Digest::SHA3_512.new, nonce)
-  puts "Nonce signature"
-  puts nonce_signature.hexstring
+    def self.digest_hello(digest, hello)
+      digest << hello.key_xchg_public_key.not_nil!
+      digest << hello.key_xchg_public_key_signature.not_nil!
+      digest << hello.nonce.not_nil!
+      digest << hello.nonce_signature.not_nil!
+    end
 
-  puts "Hello"
-  msg = Message::Hello.new
-  msg.key_xchg_public_key = fresh.x509_public
-  msg.key_xchg_public_key_signature = fresh_signature
-  msg.nonce = nonce
-  msg.nonce_signature = nonce_signature
-  write_sized(msg, client)
+    def handshake : Nil
+      Log.info { "handshaking..." }
+      nonce = Random::Secure.random_bytes 16
 
-  puts "Accept status"
-  msg_in = read_sized(Message::AcceptStatus, client)
-  p! msg_in
+      out_hello = Message::Hello.new
+      out_hello.key_xchg_public_key = @xchg.x509_public
+      out_hello.key_xchg_public_key_signature = @client.sign_sha3_512(@xchg.x509_public)
+      out_hello.nonce = nonce
+      out_hello.nonce_signature = @client.sign_sha3_512(nonce)
+      @client.socket.write_protobuf_sized out_hello
 
-  puts "Hello in"
-  msg_in = read_sized(Message::Hello, client)
-  p! msg_in
+      in_hello = @client.socket.read_protobuf_sized(Message::Hello)
 
-  def self.add_to_digest(digest, hello)
-    digest << hello.key_xchg_public_key.not_nil!
-    digest << hello.key_xchg_public_key_signature.not_nil!
-    digest << hello.nonce.not_nil!
-    digest << hello.nonce_signature.not_nil!
+      unless @client.verify_sha3_512(in_hello.key_xchg_public_key_signature.not_nil!, in_hello.key_xchg_public_key.not_nil!)
+        Log.error { "Server key exchange signature doesn't match known signing key!" }
+        raise IO::Error.new("Server invalid signature")
+      end
+      unless @client.verify_sha3_512(in_hello.nonce_signature.not_nil!, in_hello.nonce.not_nil!)
+        Log.error { "Server nonce signature doesn't match known signing key!" }
+        raise IO::Error.new("Server invalid signature")
+      end
+      Log.notice { "Server signature verified" }
+
+      hash = Digest::SHA3_512.digest do |digest|
+        self.class.digest_hello digest, out_hello
+        self.class.digest_hello digest, in_hello
+      end
+
+      peer_xchg = PKey::X25519.from_x509_public(in_hello.key_xchg_public_key.not_nil!)
+      shared = PKey::X25519.compute_shared_secret(@xchg, peer_xchg)
+
+      local_key = HKDF.derive(Algorithm::SHA512, 32, hash, shared, "#{nonce.hexstring} key")
+      local_iv = HKDF.derive(Algorithm::SHA512, 16, hash, shared, "#{nonce.hexstring} iv")
+      remote_key = HKDF.derive(Algorithm::SHA512, 32, hash, shared, "#{in_hello.nonce.not_nil!.hexstring} key")
+      remote_iv = HKDF.derive(Algorithm::SHA512, 16, hash, shared, "#{in_hello.nonce.not_nil!.hexstring} iv")
+
+      cipher = CipherStreamIO.new(@client.socket, "aes-256-cfb8",
+        local_key: local_key, local_iv: local_iv,
+        remote_key: remote_key, remote_iv: remote_iv,
+      )
+      @cipher = cipher
+      Log.notice { "Handshake complete, switching to cipher" }
+    end
+
+    def send(t)
+      Log.info { "Sending #{t}" }
+      io.write_protobuf_sized t
+    end
+
+    def recv(t : T.class) : T forall T
+      v = io.read_protobuf_sized t
+      Log.info { "Received #{v}" }
+      v
+    end
   end
 
-  digest = Digest::SHA3_512.new
-  add_to_digest digest, msg
-  add_to_digest digest, msg_in
-  hash = digest.final
+  sdb = Client::ServerDB.new
+  server = Client::ServerDB.interactive_selector sdb
 
-  remote_pubkey = PKey::X25519.from_x509_public(msg_in.key_xchg_public_key.not_nil!)
-  shared = PKey::X25519.compute_shared_secret(fresh, remote_pubkey)
-  puts shared.hexstring
+  client = Client.new(load_or_generate_key, server)
+  conn = client.connect
+  conn.handshake
 
-  local_key = HKDF.derive(Algorithm::SHA512, 32, hash, shared, "#{nonce.hexstring} key".to_slice)
-  local_iv = HKDF.derive(Algorithm::SHA512, 16, hash, shared, "#{nonce.hexstring} iv".to_slice)
-  remote_key = HKDF.derive(Algorithm::SHA512, 32, hash, shared, "#{msg_in.nonce.not_nil!.hexstring} key".to_slice)
-  remote_iv = HKDF.derive(Algorithm::SHA512, 16, hash, shared, "#{msg_in.nonce.not_nil!.hexstring} iv".to_slice)
+  msg_out = Message::AcceptStatus.new
+  msg_out.deny_reason = "I love you! I love you! I love you! I love you! I love you! I love you!"
+  conn.send msg_out
 
-  p! local_key.hexstring, local_iv.hexstring, remote_key.hexstring, remote_iv.hexstring
-
-  cipher = CipherStreamIO.new(client, "aes-256-cfb8", local_iv, local_key, remote_iv, remote_key)
-  msg = Message::AcceptStatus.new
-  msg.deny_reason = "I love you! I love you! I love you! I love you! I love you! I love you!"
-  write_sized(msg, cipher)
-
-  msg_in = read_sized(Message::AcceptStatus, cipher)
+  msg_in = conn.recv Message::AcceptStatus
   p! msg_in
-
 end
