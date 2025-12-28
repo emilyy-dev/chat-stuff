@@ -31,24 +31,28 @@ public final class CryptoUtil {
 
   private static final String SIGNATURE_KEY_ALGO = "RSA";
   private static final String KEY_EXCHANGE_ALGO = "X25519";
+  private static final String SIGNING_CIPHER_ALGO = "PBEWithHmacSHA512AndAES_256";
   private static final String CIPHER_TRANS = "AES/CFB8/NoPadding";
   private static final String SIGNER_ALGO = "SHA3-512withRSA";
   private static final String KEY_AGREEMENT_ALGO = KEY_EXCHANGE_ALGO;
   private static final String KEY_DERIVATION_FUNCTION_ALGO = "HKDF-SHA512";
   private static final String HANDSHAKE_HASH_ALGO = "SHA3-512";
   private static final String KEY_FACTORY_ALGO = KEY_EXCHANGE_ALGO;
+  private static final int SIGNING_KEY_SIZE = 4096;
   private static final int CIPHER_BLOCK_SIZE = 16;
   private static final int CIPHER_KEY_SIZE = 32;
 
-  public static KeyPairGenerator signatureKeyPairGenerator() {
+  public static KeyPairGenerator signatureKeyPairGenerator(final SecureRandom randomSource) {
     try {
-      return KeyPairGenerator.getInstance(SIGNATURE_KEY_ALGO);
+      final KeyPairGenerator generator = KeyPairGenerator.getInstance(SIGNATURE_KEY_ALGO);
+      generator.initialize(SIGNING_KEY_SIZE, randomSource);
+      return generator;
     } catch (final NoSuchAlgorithmException ex) {
       throw new RuntimeException(ex);
     }
   }
 
-  public static KeyPairGenerator keyExchangeKeyPairGenerator() {
+  public static KeyPairGenerator keyXchgKeyPairGenerator() {
     try {
       return KeyPairGenerator.getInstance(KEY_EXCHANGE_ALGO);
     } catch (final NoSuchAlgorithmException ex) {
@@ -75,14 +79,6 @@ public final class CryptoUtil {
   public static KeyFactory signingKeyFactory() {
     try {
       return KeyFactory.getInstance(SIGNATURE_KEY_ALGO);
-    } catch (final NoSuchAlgorithmException ex) {
-      throw new RuntimeException(ex);
-    }
-  }
-
-  public static KeyAgreement keyAgreement() {
-    try {
-      return KeyAgreement.getInstance(KEY_AGREEMENT_ALGO);
     } catch (final NoSuchAlgorithmException ex) {
       throw new RuntimeException(ex);
     }
@@ -139,15 +135,15 @@ public final class CryptoUtil {
   }
 
   public static Keys generateKeys(
-      final KeyAgreement keyAgreement,
       final PrivateKey privateKey,
       final SecureRandom randomSource,
       final PublicKey publicKey,
       final byte[] handshakeHash,
-      final byte[] localPublicSigningKey,
-      final byte[] remotePublicSigningKey
+      final byte[] localNonce,
+      final byte[] remoteNonce
   ) {
     try {
+      final KeyAgreement keyAgreement = KeyAgreement.getInstance(KEY_AGREEMENT_ALGO);
       keyAgreement.init(privateKey, randomSource);
       keyAgreement.doPhase(publicKey, true);
       final KDF kdf = KDF.getInstance(KEY_DERIVATION_FUNCTION_ALGO);
@@ -158,13 +154,13 @@ public final class CryptoUtil {
               .addIKM(sharedSecret);
       Arrays.fill(sharedSecret, (byte) 0);
 
-      final String localAsHex = HexFormat.of().formatHex(localPublicSigningKey);
+      final String localAsHex = HexFormat.of().formatHex(localNonce);
       final byte[] localKeyInfo = String.format("%s key", localAsHex).getBytes(StandardCharsets.UTF_8);
       final byte[] localIvInfo = String.format("%s iv", localAsHex).getBytes(StandardCharsets.UTF_8);
       final SecretKey localKey = kdf.deriveKey("AES", keyBuilder.thenExpand(localKeyInfo, CIPHER_KEY_SIZE));
       final byte[] localIv = kdf.deriveData(keyBuilder.thenExpand(localIvInfo, CIPHER_BLOCK_SIZE));
 
-      final String remoteAsHex = HexFormat.of().formatHex(remotePublicSigningKey);
+      final String remoteAsHex = HexFormat.of().formatHex(remoteNonce);
       final byte[] remoteKeyInfo = String.format("%s key", remoteAsHex).getBytes(StandardCharsets.UTF_8);
       final byte[] remoteIvInfo = String.format("%s iv", remoteAsHex).getBytes(StandardCharsets.UTF_8);
       final SecretKey remoteKey = kdf.deriveKey("AES", keyBuilder.thenExpand(remoteKeyInfo, CIPHER_KEY_SIZE));

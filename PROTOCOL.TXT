@@ -3,40 +3,53 @@
 
 ------------------------------------------------------ BOOTING UP ------------------------------------------------------
 
-  Server starts up, loads (password-protected via KeyStore) or generates its keypair (RSA) used for signing
-(SHA3-512withRSA). The server's public signing key is to be known ahead-of-time by clients.
+  Server starts up, loads (password-protected using PBEWithHmacSHA512AndAES_256) or generates its keypair (RSA) used for
+signing (SHA3-512withRSA). The server's public signing key is to be known ahead-of-time by clients.
 
-  Client starts up, loads (password-protected via KeyStore) or generates its keypair (RSA) used for signing
-(SHA3-512withRSA).
+  Client starts up, loads (password-protected using PBEWithHmacSHA512AndAES_256) or generates its keypair (RSA) used for
+signing (SHA3-512withRSA).
 
 ------------------------------------------- CLIENT/SERVER PROTOCOL HANDSHAKE -------------------------------------------
 
   Magic protocol number: 0xea68
   Current protocol version: 0
 
-  Server listens for TCP connections, client connects to the server and sends the magic protocol number (uint16) and
-protocol version (uint16), server accepts the connection and checks for the received magic protocol number and protocol
-version:
+  Server listens for TCP connections, client connects to the server and sends the magic protocol number
+(uint16 in network byte order) and protocol version (uint16 in network byte order), server accepts the connection and
+checks for the received magic protocol number and protocol version:
   * If the magic number does not match the connection is immediately closed.
   * Otherwise if the protocol version does not match the server sends a AcceptStatus message with an appropriately
     descriptive deny_reason field, then it closes the connection.
-  * Otherwise the server sends a AcceptStatus message with no deny_reason field (NOT an empty string) and awaits for the
-    client to send a Hello message.
+  * Otherwise the server sends a AcceptStatus message with no deny_reason field (NOT an empty string). Proceed with
+    Encryption Handshake Between Peers where Party 1 = client and Party 2 = server.
 
 ------------------------------------------ ENCRYPTION HANDSHAKE BETWEEN PEERS ------------------------------------------
 
-  Party 1 (Alice) generates a fresh keypair (X25519) used for generating a secret key (256-bit AES) and a random nonce
-as it wishes to perform a handshake with Party 2 (Bob) and sends a Hello message with the generated public key for the
-secret key agreement procedure, its signature, the random nonce, and its signature.
+  Party 1 (Alice) generates a fresh keypair (X25519) used for generating a shared secret (256-bit AES, explained later
+on the key agreement procedure) and a random nonce (byte[16]) as it wishes to perform a handshake with Party 2 (Bob) and
+sends a Hello message with the generated public key for the secret key agreement procedure, its signature, the random
+nonce, and its signature.
 
-  Bob generates a fresh keypair (X25519) used for generating a secret key (256-bit AES) and a random nonce as it wishes
-to accept and perform the handshake with Alice, receives Bob's Hello message and sends back a Hello message with the
-generated public key for the secret agreement procedure, its signature, the random nonce, and its signature.
+  Bob generates a fresh keypair (X25519) used for generating a shared secret (256-bit AES, explained later on the key
+agreement procedure) and a random nonce (byte[16]) as it wishes to accept and perform the handshake with Alice, receives
+Alice's Hello message and sends back a Hello message with the generated public key for the secret agreement procedure,
+its signature, the random nonce, and its signature.
+
+  If Bob is the server, then Alice must verify the provided signatures with the known server's public signing key.
 
   Once that happens, both peers via KeyAgreement (X25519) using their private key from the freshly-generated keypair and
 the peer's public key generate the shared secret, they also generate a hash (SHA3-512) of all the messages sent until
-now (Alice's hello, Bob's hello), then a key derivation function (KDF, HKDF-SHA512) is used with the shared secret as
-initial keying material (IKM), the messages hash as salt, and the nonces as info for generating:
+now:
+  * Alice's public key exchange key
+  * Alice's public key exchange key signature
+  * Alice's public nonce
+  * Alice's public nonce signature
+  * Bob's public key exchange key
+  * Bob's public key exchange key signature
+  * Bob's public nonce
+  * Bob's public nonce signature
+Then a key derivation function (KDF, HKDF-SHA512) is used with the shared secret as initial keying material (IKM), the
+messages hash as salt, and the nonces as info for generating:
   * a local key, using the string "{} key" as KDF info where "{}" is replaced with the hexdump of the local nonce
   * a local IV, using the string "{} iv" as KDF info where "{}" is replaced with the hexdump of the local nonce
   * a remote key, using the string "{} key" as KDF info where "{}" is replaced with the hexdump of the remote nonce
