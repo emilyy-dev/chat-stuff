@@ -1,15 +1,15 @@
-require "protobuf"
+require "protocr"
 
 class IO
   def write_protobuf_sized(t : T) : Nil forall T
     buf = t.to_protobuf
-    Protobuf::Buffer.new(self).write_int32(buf.size)
-    IO.copy buf, self
+    Protocr::Writer.new(self).write_varint_i32(buf.size)
+    self.write buf
     self.flush
   end
 
   def read_protobuf_sized(t : T.class) : T forall T
-    size = Protobuf::Buffer.new(self).read_uint32.not_nil!
+    size = Protocr::Reader.new(self).read_varint_u32.not_nil!
     t.from_protobuf(IO::Sized.new(self, size))
   end
 end

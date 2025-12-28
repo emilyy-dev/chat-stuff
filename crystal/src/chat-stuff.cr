@@ -7,6 +7,7 @@ module Chatty
   MAGIC   = 0xea68u16
   VERSION =      0u16
 
+  alias Message = Chat::Stuffs::Proto
   include OpenSSL
 
   def self.load_or_generate_key(file = "key.pem")
@@ -53,9 +54,9 @@ module Chatty
       @socket.write_bytes(MAGIC, IO::ByteFormat::NetworkEndian)
       @socket.write_bytes(VERSION, IO::ByteFormat::NetworkEndian)
       accept = @socket.read_protobuf_sized(Message::AcceptStatus)
-      if deny = accept.deny_reason
-        Log.error { "Server rejected us: #{deny}" }
-        raise IO::Error.new(deny)
+      if accept.has_deny_reason?
+        Log.error { "Server rejected us: #{accept.deny_reason}" }
+        raise IO::Error.new(accept.deny_reason)
       end
 
       Connection.new self
@@ -89,10 +90,10 @@ module Chatty
     end
 
     def self.digest_hello(digest, hello)
-      digest << hello.key_xchg_public_key.not_nil!
-      digest << hello.key_xchg_public_key_signature.not_nil!
-      digest << hello.nonce.not_nil!
-      digest << hello.nonce_signature.not_nil!
+      digest << hello.key_xchg_public_key
+      digest << hello.key_xchg_public_key_signature
+      digest << hello.nonce
+      digest << hello.nonce_signature
     end
 
     def handshake : Nil
@@ -108,11 +109,11 @@ module Chatty
 
       in_hello = @client.socket.read_protobuf_sized(Message::Hello)
 
-      unless @client.verify_sha3_512(in_hello.key_xchg_public_key_signature.not_nil!, in_hello.key_xchg_public_key.not_nil!)
+      unless @client.verify_sha3_512(in_hello.key_xchg_public_key_signature, in_hello.key_xchg_public_key)
         Log.error { "Server key exchange signature doesn't match known signing key!" }
         raise IO::Error.new("Server invalid signature")
       end
-      unless @client.verify_sha3_512(in_hello.nonce_signature.not_nil!, in_hello.nonce.not_nil!)
+      unless @client.verify_sha3_512(in_hello.nonce_signature, in_hello.nonce)
         Log.error { "Server nonce signature doesn't match known signing key!" }
         raise IO::Error.new("Server invalid signature")
       end
@@ -123,13 +124,13 @@ module Chatty
         self.class.digest_hello digest, in_hello
       end
 
-      peer_xchg = PKey::X25519.from_x509_public(in_hello.key_xchg_public_key.not_nil!)
+      peer_xchg = PKey::X25519.from_x509_public(in_hello.key_xchg_public_key)
       shared = PKey::X25519.compute_shared_secret(@xchg, peer_xchg)
 
       local_key = HKDF.derive(Algorithm::SHA512, 32, hash, shared, "#{nonce.hexstring} key")
       local_iv = HKDF.derive(Algorithm::SHA512, 16, hash, shared, "#{nonce.hexstring} iv")
-      remote_key = HKDF.derive(Algorithm::SHA512, 32, hash, shared, "#{in_hello.nonce.not_nil!.hexstring} key")
-      remote_iv = HKDF.derive(Algorithm::SHA512, 16, hash, shared, "#{in_hello.nonce.not_nil!.hexstring} iv")
+      remote_key = HKDF.derive(Algorithm::SHA512, 32, hash, shared, "#{in_hello.nonce.hexstring} key")
+      remote_iv = HKDF.derive(Algorithm::SHA512, 16, hash, shared, "#{in_hello.nonce.hexstring} iv")
 
       cipher = CipherStreamIO.new(@client.socket, "aes-256-cfb8",
         local_key: local_key, local_iv: local_iv,
@@ -140,13 +141,13 @@ module Chatty
     end
 
     def send(t)
-      Log.info { "Sending #{t}" }
+      Log.info { "Sending #{t.inspect}" }
       io.write_protobuf_sized t
     end
 
     def recv(t : T.class) : T forall T
       v = io.read_protobuf_sized t
-      Log.info { "Received #{v}" }
+      Log.info { "Received #{v.inspect}" }
       v
     end
   end
@@ -158,10 +159,20 @@ module Chatty
   conn = client.connect
   conn.handshake
 
-  msg_out = Message::AcceptStatus.new
-  msg_out.deny_reason = "I love you! I love you! I love you! I love you! I love you! I love you!"
-  conn.send msg_out
+  req = Message::Request.new
+  msg_out = Message::Keepalive.new
+  req.keepalive = msg_out
+  req.id = 1
+  conn.send req
 
-  msg_in = conn.recv Message::AcceptStatus
-  p! msg_in
+  msg_in = conn.recv Message::Response
+
+  req = Message::Request.new
+  msg_out = Message::Disconnect.new
+  msg_out.reason = "bye"
+  req.disconnect = msg_out
+  req.id = 3
+  conn.send req
+
+  msg_in = conn.recv Message::Response
 end
