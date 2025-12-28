@@ -1,0 +1,7 @@
+syntax = "proto3";
+
+package chat.stuffs.proto;
+
+message Disconnect {
+  string reason = 1;
+}

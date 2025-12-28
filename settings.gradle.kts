@@ -4,3 +4,4 @@ plugins {
 
 rootProject.name = "chat-stuff"
 include("java")
+project(":java").name = rootProject.name

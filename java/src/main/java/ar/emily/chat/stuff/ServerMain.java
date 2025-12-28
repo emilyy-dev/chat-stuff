@@ -1,7 +1,10 @@
 package ar.emily.chat.stuff;
 
 import module java.base;
+import chat.stuffs.proto.DisconnectOuterClass;
 import chat.stuffs.proto.Handshake;
+import chat.stuffs.proto.KeepaliveOuterClass;
+import chat.stuffs.proto.Messages;
 import com.google.protobuf.ByteString;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -13,6 +16,7 @@ public final class ServerMain {
 
   private static final Logger LOGGER = LoggerUtil.getLogger();
 
+  private static final Duration READ_WRITE_TIMEOUT = Duration.ofSeconds(10L);
   private static final ScopedValue<ServerInfo> SERVER_INFO = ScopedValue.newInstance();
   private static final SecureRandom RANDOM_SOURCE;
 
@@ -71,7 +75,10 @@ public final class ServerMain {
   }
 
   private KeyPair loadSigningKeyPair(final Path keyStorePath, final String[] args) throws IOException {
-    if (true) { return CryptoUtil.signatureKeyPairGenerator(new SecureRandom()).generateKeyPair(); }
+    if (true) {
+      LOGGER.info("Generating new signing keypair...");
+      return CryptoUtil.signatureKeyPairGenerator(new SecureRandom()).generateKeyPair();
+    }
 
     if (Files.notExists(keyStorePath)) {
       LOGGER.warn("Keystore file does not exist, generating brand new signing keypair and saving it");
@@ -82,6 +89,7 @@ public final class ServerMain {
         throw new RuntimeException(); // never reached
       }
 
+      LOGGER.info("Generating new signing keypair...");
       final KeyPair signingKeyPair = CryptoUtil.signatureKeyPairGenerator(null).generateKeyPair();
       try (final var out = Files.newOutputStream(keyStorePath)) {
         return signingKeyPair;
@@ -105,18 +113,18 @@ public final class ServerMain {
   }
 
   void main(final String[] args) throws InterruptedException, IOException {
+    LOGGER.info("Java: {}", Runtime.version());
     final KeyPair signingKeyPair = loadSigningKeyPair(findKeyStorePath(args), args);
-    LOGGER.info("Public signing key: {}", HexFormat.of().formatHex(signingKeyPair.getPublic().getEncoded()));
+    LOGGER.info("Public signing key:\n{}", PEMEncoder.of().encodeToString(signingKeyPair.getPublic()));
 
     try (final var scope = StructuredTaskScope.open()) {
       try (final var serverChannel = ServerSocketChannel.open()) {
-        ScopedValue.where(
-            SERVER_INFO,
-            new ServerInfo(serverChannel, signingKeyPair.getPublic(), signingKeyPair.getPrivate())
-        ).run(() -> scope.fork(this::serverAcceptLoop));
-
+        LOGGER.info("Bound to {}", serverChannel.bind(new InetSocketAddress(39615)).getLocalAddress());
+        final ServerInfo serverInfo = new ServerInfo(serverChannel, signingKeyPair.getPublic(), signingKeyPair.getPrivate());
+        scope.fork(() -> ScopedValue.where(SERVER_INFO, serverInfo).run(this::serverAcceptLoop));
         new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))
             .lines().anyMatch(Predicate.isEqual("shutdown").or(Objects::isNull));
+        LOGGER.info("Shutting down...");
       } catch (final IOException ex) {
         try {
           scope.join();
@@ -135,24 +143,16 @@ public final class ServerMain {
     final ServerInfo serverInfo = SERVER_INFO.get();
     try (final var scope = StructuredTaskScope.open(StructuredTaskScope.Joiner.awaitAll())) {
       try {
+        LOGGER.info("Accepting connections");
         while (true) {
           final SocketChannel client = serverInfo.ch.accept();
-          scope.fork(() -> {
-            SocketAddress remoteAddress = null;
-            try (client) {
-              remoteAddress = client.getRemoteAddress();
-              handleClient(client);
-            } catch (final Exception ex) {
-              synchronized (System.err) {
-                System.err.printf("Unexpected error handling client %s%n", remoteAddress);
-                ex.printStackTrace(System.err);
-              }
-            }
-          });
+          scope.fork(() -> acceptClient(client));
         }
       } catch (final ClosedByInterruptException _) {
+        LOGGER.info("No new connections will be accepted");
       } catch (final AsynchronousCloseException _) {
         try {
+          LOGGER.info("No new connections will be accepted");
           scope.join();
         } catch (final InterruptedException _) {
           Thread.currentThread().interrupt();
@@ -169,16 +169,30 @@ public final class ServerMain {
     }
   }
 
+  private void acceptClient(final SocketChannel client) {
+    SocketAddress remoteAddress = null;
+    try (client) {
+      remoteAddress = client.getRemoteAddress();
+      LOGGER.debug("New client from {}", remoteAddress);
+      handleClient(client);
+      LOGGER.debug("Disconnecting client {}", remoteAddress);
+    } catch (final StructuredTaskScope.TimeoutException ex) {
+      LOGGER.debug("Read timeout for {}", remoteAddress, ex);
+    } catch (final Exception ex) {
+      LOGGER.error("Unexpected error handling client {}", remoteAddress, ex);
+    }
+  }
+
   private void handleClient(final SocketChannel ch) throws IOException {
     final ByteBuffer stupidBuffer = ByteBuffer.allocateDirect(Short.BYTES);
-    final short magicNumber = NetUtil.readNBytes(ch, stupidBuffer).getShort();
+    final short magicNumber = NetUtil.readNBytes(ch, READ_WRITE_TIMEOUT, stupidBuffer).getShort();
     if (magicNumber != MAGIC_NUMBER) {
       return;
     }
 
-    final InputStream in = Channels.newInputStream(ch);
-    final OutputStream out = Channels.newOutputStream(ch);
-    final short version = NetUtil.readNBytes(ch, stupidBuffer).getShort();
+    final InputStream in = new UglyTimeoutSocketChannelInputStream(ch, READ_WRITE_TIMEOUT);
+    final OutputStream out = new UglyTimeoutSocketChannelOutputStream(ch, READ_WRITE_TIMEOUT);
+    final short version = NetUtil.readNBytes(ch, READ_WRITE_TIMEOUT, stupidBuffer).getShort();
     if (version != PROTOCOL_VERSION) {
       Handshake.AcceptStatus.newBuilder()
           .setDenyReason(
@@ -245,8 +259,44 @@ public final class ServerMain {
 
     final InputStream cipherIn = new CipherInputStream(in, decryptCipher);
     final OutputStream cipherOut = new CipherOutputStream(out, encryptCipher);
+    while (true) {
+      if (readRequestMessage(cipherIn, cipherOut)) {
+        break;
+      }
+    }
+  }
 
-    // uhhhh message loop
+  private boolean readRequestMessage(final InputStream in, final OutputStream out) throws IOException {
+    final Messages.Request request = Messages.Request.parseDelimitedFrom(in);
+    return switch (request.getRequestCase()) {
+      case REGISTER, MESSAGE, ACCOUNT_STATUS -> {
+        Messages.Response.newBuilder()
+            .setId(request.getId())
+            .setDisconnect(DisconnectOuterClass.Disconnect.newBuilder().setReason("Unsupported operation"))
+            .build()
+            .writeDelimitedTo(out);
+        yield false;
+      }
+
+      case KEEPALIVE -> {
+        Messages.Response.newBuilder()
+            .setId(request.getId())
+            .setKeepalive(KeepaliveOuterClass.Keepalive.getDefaultInstance())
+            .build()
+            .writeDelimitedTo(out);
+        yield true;
+      }
+
+      case DISCONNECT -> false;
+      case REQUEST_NOT_SET -> {
+        Messages.Response.newBuilder()
+            .setId(request.getId())
+            .setDisconnect(DisconnectOuterClass.Disconnect.newBuilder().setReason("Invalid request"))
+            .build()
+            .writeDelimitedTo(out);
+        yield false;
+      }
+    };
   }
 
   private record ServerInfo(ServerSocketChannel ch, PublicKey signingPublicKey, PrivateKey signingPrivateKey) {

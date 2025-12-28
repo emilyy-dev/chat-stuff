@@ -50,10 +50,10 @@ now:
   * Bob's public nonce signature
 Then a key derivation function (KDF, HKDF-SHA512) is used with the shared secret as initial keying material (IKM), the
 messages hash as salt, and the nonces as info for generating:
-  * a local key, using the string "{} key" as KDF info where "{}" is replaced with the hexdump of the local nonce
-  * a local IV, using the string "{} iv" as KDF info where "{}" is replaced with the hexdump of the local nonce
-  * a remote key, using the string "{} key" as KDF info where "{}" is replaced with the hexdump of the remote nonce
-  * a remote IV, using the string "{} iv" as KDF info where "{}" is replaced with the hexdump of the remote nonce
+  * a local 256-bit AES key, using the string "{} key" as KDF info where "{}" is replaced with the hexdump of the local nonce
+  * a local 128-bit IV, using the string "{} iv" as KDF info where "{}" is replaced with the hexdump of the local nonce
+  * a remote 256-bit AES key, using the string "{} key" as KDF info where "{}" is replaced with the hexdump of the remote nonce
+  * a remote 128-bit IV, using the string "{} iv" as KDF info where "{}" is replaced with the hexdump of the remote nonce
 Those keys and IVs are used to create ciphers (AES_256):
   * a local cipher used to decrypt incoming messages
   * a remote cipher used to encrypt outgoing messages
@@ -65,3 +65,7 @@ same ID. Note that the ID is not required to be globally unique, it is only to b
 session between the two peers, as the IDs are entirely ephemeral to the *direction* of the current session (that is, if
 Alice sends Bob a request message with ID 123, Bob is allowed to send its own unrelated request
 message with ID 123).
+  If Bob is the server, the client must disconnect immediately upon receiving a Disconnect message (wrapped in a Request
+message) without sending a Response message back and vice-versa.
+  If Bob is the server, the client must send a Keepalive message (wrapped in a Request message) every few seconds (if no
+other messages have been sent) as the server has a read/write timeout of 10 seconds.
