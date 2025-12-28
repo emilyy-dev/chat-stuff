@@ -39,6 +39,7 @@ lib LibCrypto
   fun evp_pkey_new_raw_private_key = EVP_PKEY_new_raw_private_key(type : LibC::Int, e : Engine, key : Char*, keylen : LibC::SizeT) : EvpPKey*
 
   fun i2d_pubkey = i2d_PUBKEY(a : EvpPKey*, pp : Char**) : LibC::Int
+  fun d2i_pubkey = d2i_PUBKEY(a : EvpPKey**, pp : Char**, length : LibC::Long) : EvpPKey*
 end
 
 module OpenSSL::HKDF
@@ -168,6 +169,15 @@ module OpenSSL::PKey
       raise OpenSSL::Error.new("i2d_PUBKEY failed") if rc < 0
 
       return buffer
+    end
+
+    def self.from_x509_public(bytes : Bytes)
+      pkey = LibCrypto.evp_pkey_new
+      s = bytes.to_unsafe
+      pkey = LibCrypto.d2i_pubkey(pointerof(pkey), pointerof(s), bytes.size)
+      raise OpenSSL::Error.new("d2i_pubkey failed") if pkey.null?
+
+      return new(pkey, false)
     end
   end
 end
