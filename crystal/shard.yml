@@ -11,6 +11,8 @@ targets:
 dependencies:
   openssl_ext:
     github: spider-gazelle/openssl_ext
+  protocr:
+    github: rymiel/protocr
 
 crystal: 1.5.0
 

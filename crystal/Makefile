@@ -7,7 +7,7 @@ bin/chat-stuff: Makefile $(SRC) $(PROTO_SRC)
 
 src/proto/%.pb.cr: ../proto/%.proto
 	@mkdir -p $(@D)
-	protoc -I ../proto/ --plugin=protoc-gen-crystal=`which protocr` --crystal_out src/proto/ $<
+	protoc -I ../proto/ --plugin=protoc-gen-crystal=bin/protocr --crystal_out src/proto/ $<
 
 .PHONY: run clean
 run: bin/chat-stuff

@@ -4,3 +4,7 @@ shards:
     git: https://github.com/spider-gazelle/openssl_ext.git
     version: 2.8.3
 
+  protocr:
+    git: https://github.com/rymiel/protocr.git
+    version: 0.1.0+git.commit.0f083c0de9edd2df4e03b6d999fe703d0a0d695c
+
