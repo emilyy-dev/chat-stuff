@@ -9,8 +9,11 @@ class IO
   end
 
   def read_protobuf_sized(t : T.class) : T forall T
-    size = Protocr::Reader.new(self).read_varint_u32.not_nil!
-    t.from_protobuf(IO::Sized.new(self, size))
+    size = Protocr::Reader.new(self).read_varint_u32
+    raise EOFError.new if size.nil?
+    buf = Bytes.new size
+    read_fully buf
+    t.from_protobuf(buf)
   end
 end
 

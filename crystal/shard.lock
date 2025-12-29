@@ -6,5 +6,5 @@ shards:
 
   protocr:
     git: https://github.com/rymiel/protocr.git
-    version: 0.1.0+git.commit.4263a3819efc1c7a5995218e87e23ee9c3f5ded6
+    version: 0.2.2+git.commit.b669fe613717b3f0d228764882b48d280f78e8c2
 
