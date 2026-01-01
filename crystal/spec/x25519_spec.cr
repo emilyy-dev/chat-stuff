@@ -29,4 +29,14 @@ describe X25519 do
     bob_shared = X25519.compute_shared_secret(bob, alice.public_key)
     alice_shared.should eq bob_shared
   end
+
+  it "can't use public keys for shared secrets" do
+    alice = X25519.generate
+    bob = X25519.generate
+
+    expect_raises(OpenSSL::Error, "EVP_PKEY_derive(size) failed: error:1C800080:Provider routines::missing key") do
+      alice_shared = X25519.compute_shared_secret(alice.public_key, bob.public_key)
+      bob_shared = X25519.compute_shared_secret(bob.public_key, alice.public_key)
+    end
+  end
 end
