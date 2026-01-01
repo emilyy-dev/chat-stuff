@@ -3,13 +3,13 @@ require "protocr"
 class IO
   def write_protobuf_sized(t : T) : Nil forall T
     buf = t.to_protobuf
-    Protocr::Writer.new(self).write_varint_i32(buf.size)
+    Protocr.write_varint(self, buf.size.to_u64!)
     self.write buf
     self.flush
   end
 
   def read_protobuf_sized(t : T.class) : T forall T
-    size = Protocr::Reader.new(self).read_varint_u32
+    size = Protocr.read_varint(self)
     raise EOFError.new if size.nil?
     buf = Bytes.new size
     read_fully buf
