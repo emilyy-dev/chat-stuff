@@ -12,4 +12,3 @@ message Hello {
   bytes nonce = 3;
   bytes nonce_signature = 4;
 }
-

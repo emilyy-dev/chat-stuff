@@ -48,24 +48,63 @@ now:
   * Bob's public key exchange key signature
   * Bob's public nonce
   * Bob's public nonce signature
+
 Then a key derivation function (KDF, HKDF-SHA512) is used with the shared secret as initial keying material (IKM), the
 messages hash as salt, and the nonces as info for generating:
   * a local 256-bit AES key, using the string "{} key" as KDF info where "{}" is replaced with the hexdump of the local nonce
   * a local 128-bit IV, using the string "{} iv" as KDF info where "{}" is replaced with the hexdump of the local nonce
   * a remote 256-bit AES key, using the string "{} key" as KDF info where "{}" is replaced with the hexdump of the remote nonce
   * a remote 128-bit IV, using the string "{} iv" as KDF info where "{}" is replaced with the hexdump of the remote nonce
+
 Those keys and IVs are used to create ciphers (AES_256):
   * a local cipher used to decrypt incoming messages
   * a remote cipher used to encrypt outgoing messages
 
   Every future message that is sent and received from either party is encrypted and decrypted using the corresponding
 cipher. Every future message that is sent to the other party is to be wrapped in a Request message with a unique ID
-(uint64) for that message, and every request that requires a response is to be wrapped in a Response message with the
-same ID. Note that the ID is not required to be globally unique, it is only to be unique in the current communication
-session between the two peers, as the IDs are entirely ephemeral to the *direction* of the current session (that is, if
-Alice sends Bob a request message with ID 123, Bob is allowed to send its own unrelated request
-message with ID 123).
-  If Bob is the server, the client must disconnect immediately upon receiving a Disconnect message (wrapped in a Request
-message) without sending a Response message back and vice-versa.
-  If Bob is the server, the client must send a Keepalive message (wrapped in a Request message) every few seconds (if no
-other messages have been sent) as the server has a read/write timeout of 10 seconds.
+(uint64) for that message, and every request that has a specific response is to be wrapped in a Response message
+with the same ID. Note that the ID is not required to be globally unique, it is only to be unique in the current
+communication session between the two peers, as the IDs are entirely ephemeral to the *direction* of the current session
+(that is, if Alice sends Bob a request message with ID 123, Bob is allowed to send its own unrelated request message
+with ID 123). Requests that do not have a specific response are to be responded with a Response message with the same ID
+and no message field set. Requests that have been responded to by a corresponding Response message can free their ID to
+be reused in future requests. IDs are not required to be sequential but is recommended.
+
+---------------------------------------------- CLIENT/SERVER CONSTRAINTS -----------------------------------------------
+
+  * The client must disconnect immediately upon receiving a Disconnect message without sending a Response message back
+and vice-versa.
+  * The client must send a Keepalive message every few seconds (if no other messages have been sent) as the server has a
+read/write timeout of 10 seconds.
+
+------------------------------------------------ CLIENT/SERVER PROTOCOL ------------------------------------------------
+
+TODO: this section, when user registration and user authentication need to be performed and future stuffs
+
+-------------------------------------------------- USER REGISTRATION ---------------------------------------------------
+
+  When a client desires to register as a new user with the server, it shall send a RegisterRequest message with the
+desired username and the client's public signing key. The server then retroactively verifies the signatures sent in the
+initial handshake message with the received signing key:
+  * If either signature cannot be verified the server sends a Disconnect message with an appropriate reason and closes
+    the connection.
+  * Otherwise the server searches for the username's availability in its storage backend:
+    * If the username does not have an associated public signing key then the server reserves it to become unavailable
+      for future client registrations and associates with it the sent public signing key and responds with a
+      RegisterResponse message with no error_message field
+    * Otherwise if the username is unavailable for registration and is already associated with a public signing key, it
+      responds with a RegisterResponse message with the error_message field set to an appropriately descriptive one.
+      Registration failure does not constitute grounds for disconnection.
+
+------------------------------------------------- USER AUTHENTICATION --------------------------------------------------
+
+  When a client desires to authenticate with a username to the server, it shall send an AuthenticationRequest message
+with the username to authenticate as. The server then verifies that the username has an associated public signing key
+in its storage backend:
+  * If it does not then the server responds with an AuthenticationResponse message with an appropriately descriptive
+    error_message field.
+  * Otherwise the server retroactively verifies the signatures  sent in the initial handshake message with the
+    username's associated public signing key:
+    * If either signature cannot be verified the server sends a Disconnect message with an appropriate reason and closes
+      the connection.
+    * Otherwise the client is considered authenticated with that username for the rest of the session's lifetime.

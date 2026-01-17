@@ -2,11 +2,10 @@ syntax = "proto3";
 
 package chat.stuffs.proto;
 
-message RegisterRequest {
+message AuthenticationRequest {
   string username = 1;
-  bytes public_signing_key = 2;
 }
 
-message RegisterResponse {
+message AuthenticationResponse {
   optional string error_message = 1;
 }
