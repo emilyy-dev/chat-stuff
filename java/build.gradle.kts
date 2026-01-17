@@ -12,6 +12,7 @@ repositories {
 
 dependencies {
   implementation("org.jspecify:jspecify:1.0.0")
+  implementation("org.jetbrains:annotations:26.0.2-1")
 
   implementation(platform("com.google.protobuf:protobuf-bom:4.33.2"))
   implementation("com.google.protobuf:protobuf-java")

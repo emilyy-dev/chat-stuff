@@ -7,4 +7,5 @@ module ar.emily.chat.stuff {
   requires com.google.protobuf;
   requires org.jspecify;
   requires org.slf4j;
+  requires org.jetbrains.annotations;
 }

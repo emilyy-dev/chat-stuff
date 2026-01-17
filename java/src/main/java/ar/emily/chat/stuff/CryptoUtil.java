@@ -5,7 +5,6 @@ import javax.crypto.KDF;
 import javax.crypto.KeyAgreement;
 import javax.crypto.NoSuchPaddingException;
 import javax.crypto.SecretKey;
-import javax.crypto.ShortBufferException;
 import javax.crypto.spec.HKDFParameterSpec;
 import javax.crypto.spec.IvParameterSpec;
 import java.nio.ByteBuffer;
@@ -22,7 +21,6 @@ import java.security.SecureRandom;
 import java.security.Signature;
 import java.security.SignatureException;
 import java.security.spec.InvalidKeySpecException;
-import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Arrays;
 import java.util.HexFormat;
@@ -115,22 +113,9 @@ public final class CryptoUtil {
     }
   }
 
-  public static byte[] encodePrivateKey(final KeyFactory factory, final PrivateKey key) {
-    try {
-      return factory.getKeySpec(key, PKCS8EncodedKeySpec.class).getEncoded();
-    } catch (final InvalidKeySpecException ex) {
-      throw new RuntimeException(ex);
-    }
-  }
-
   public static PublicKey decodePublicKey(final KeyFactory factory, final byte[] encodedKey)
       throws InvalidKeySpecException {
     return factory.generatePublic(new X509EncodedKeySpec(encodedKey));
-  }
-
-  public static PrivateKey decodePrivateKey(final KeyFactory factory, final byte[] encodedKey)
-      throws InvalidKeySpecException {
-    return factory.generatePrivate(new PKCS8EncodedKeySpec(encodedKey));
   }
 
   public static Keys generateKeys(
@@ -171,30 +156,11 @@ public final class CryptoUtil {
     }
   }
 
-  public static ByteBuffer encrypt(final Cipher cipher, final ByteBuffer payload) {
-    try {
-      cipher.update(payload.duplicate(), payload);
-      return payload.flip();
-    } catch (final ShortBufferException ex) {
-      throw new RuntimeException(ex);
-    }
-  }
-
-  public static ByteBuffer decrypt(final Cipher cipher, final ByteBuffer payload) {
-    try {
-      cipher.update(payload.duplicate(), payload);
-      return payload.flip();
-    } catch (final ShortBufferException ex) {
-      throw new RuntimeException(ex);
-    }
-  }
-
   public static byte[]
   sign(final Signature signer, final PrivateKey key, final SecureRandom randomSource, final ByteBuffer payload) {
-    final ByteArray _payload = new ByteArray(payload);
     try {
       signer.initSign(key, randomSource);
-      signer.update(_payload.bs, _payload.offset, _payload.length);
+      signer.update(payload);
       return signer.sign();
     } catch (final InvalidKeyException | SignatureException ex) {
       throw new RuntimeException(ex);
@@ -204,35 +170,27 @@ public final class CryptoUtil {
   public static boolean
   verify(final Signature signer, final PublicKey key, final ByteBuffer payload, final ByteBuffer signature)
       throws InvalidKeyException, SignatureException {
-    final ByteArray _payload = new ByteArray(payload);
-    final ByteArray _signature = new ByteArray(signature);
     signer.initVerify(key);
-    signer.update(_payload.bs, _payload.offset, _payload.length);
-    return signer.verify(_signature.bs, _signature.offset, _signature.length);
+    signer.update(payload);
+
+    final byte[] bs;
+    final int offset;
+    final int length;
+    if (signature.hasArray()) {
+      bs = signature.array();
+      offset = signature.arrayOffset() + signature.position();
+      length = signature.remaining();
+      signature.position(signature.limit());
+    } else {
+      offset = 0;
+      length = signature.remaining();
+      bs = new byte[length];
+      signature.get(bs);
+    }
+
+    return signer.verify(bs, offset, length);
   }
 
   private CryptoUtil() {
-  }
-
-  private record ByteArray(byte[] bs, int offset, int length) {
-
-    private ByteArray(final ByteBuffer buffer) {
-      final byte[] bs;
-      final int offset;
-      final int length;
-      if (buffer.hasArray()) {
-        offset = buffer.arrayOffset() + buffer.position();
-        length = buffer.remaining();
-        bs = buffer.array();
-        buffer.position(buffer.limit());
-      } else {
-        offset = 0;
-        length = buffer.remaining();
-        bs = new byte[length];
-        buffer.get(bs);
-      }
-
-      this(bs, offset, length);
-    }
   }
 }

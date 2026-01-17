@@ -6,6 +6,9 @@ import chat.stuffs.proto.Handshake;
 import chat.stuffs.proto.KeepaliveOuterClass;
 import chat.stuffs.proto.Messages;
 import com.google.protobuf.ByteString;
+import com.google.protobuf.CodedInputStream;
+import com.google.protobuf.MessageLite;
+import com.google.protobuf.Parser;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 
@@ -123,14 +126,15 @@ public final class ServerMain {
   }
 
   void main(final String[] args) throws InterruptedException, IOException {
-    LOGGER.info("Java: {}", Runtime.version());
+    LOGGER.info("Java: {} - {}", System.getProperty("java.vendor"), Runtime.version());
     final KeyPair signingKeyPair = loadSigningKeyPair(findKeyStorePath(args), args);
     LOGGER.info("Public signing key:\n{}", PEMEncoder.of().encodeToString(signingKeyPair.getPublic()));
 
     try (final var scope = StructuredTaskScope.open(new AnySubtaskJoiner<>())) {
       try (final var serverChannel = ServerSocketChannel.open()) {
         LOGGER.info("Bound to {}", serverChannel.bind(new InetSocketAddress(39615)).getLocalAddress());
-        final ServerInfo serverInfo = new ServerInfo(serverChannel, signingKeyPair.getPublic(), signingKeyPair.getPrivate());
+        final ServerInfo serverInfo =
+            new ServerInfo(serverChannel, signingKeyPair.getPublic(), signingKeyPair.getPrivate());
         scope.fork(() -> ScopedValue.where(SERVER_INFO, serverInfo).run(this::serverAcceptLoop));
 
         scope.fork(() -> {
@@ -143,8 +147,8 @@ public final class ServerMain {
       } catch (final IOException ex) {
         try {
           scope.join();
-        } catch (final InterruptedException intEx) {
-          ex.addSuppressed(intEx);
+        } catch (InterruptedException _) {
+          Thread.currentThread().interrupt();
         }
 
         throw ex;
@@ -224,7 +228,7 @@ public final class ServerMain {
     final byte[] nonceSignature =
         CryptoUtil.sign(signer, SERVER_INFO.get().signingPrivateKey(), RANDOM_SOURCE, ByteBuffer.wrap(nonce));
 
-    final Handshake.Hello clientHello = Handshake.Hello.parseDelimitedFrom(in);
+    final Handshake.Hello clientHello = parseDelimitedFrom(Handshake.Hello.parser(), in);
     final PublicKey clientPublicKey;
     try {
       clientPublicKey = CryptoUtil.decodePublicKey(keyXchgKeyFactory, clientHello.getKeyXchgPublicKey().toByteArray());
@@ -274,7 +278,7 @@ public final class ServerMain {
   }
 
   private boolean readRequestMessage(final InputStream in, final OutputStream out) throws IOException {
-    final Messages.Request request = Messages.Request.parseDelimitedFrom(in);
+    final Messages.Request request = parseDelimitedFrom(Messages.Request.parser(), in);
     return switch (request.getRequestCase()) {
       case REGISTER, MESSAGE, ACCOUNT_STATUS -> {
         Messages.Response.newBuilder()
@@ -310,6 +314,28 @@ public final class ServerMain {
         yield false;
       }
     };
+  }
+
+  private static final int MAX_PAYLOAD_SIZE = 0x200000; // 2 MiB
+  private static <T extends MessageLite> T parseDelimitedFrom(final Parser<T> parser, final InputStream in)
+      throws IOException {
+    final int read = in.read();
+    if (read == -1) {
+      throw new EOFException();
+    }
+
+    final int size = CodedInputStream.readRawVarint32(read, in);
+    if (size > MAX_PAYLOAD_SIZE) {
+      throw new BufferOverflowException();
+    }
+
+    // TODO: recycle buffers
+    final byte[] messagePayload = new byte[size];
+    if (in.readNBytes(messagePayload, 0, size) != size) {
+      throw new EOFException();
+    }
+
+    return parser.parseFrom(messagePayload);
   }
 
   private record ServerInfo(ServerSocketChannel ch, PublicKey signingPublicKey, PrivateKey signingPrivateKey) {

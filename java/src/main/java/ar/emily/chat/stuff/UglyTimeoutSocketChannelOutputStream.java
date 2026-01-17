@@ -3,13 +3,8 @@ package ar.emily.chat.stuff;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
-import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.SocketChannel;
 import java.time.Duration;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 class UglyTimeoutSocketChannelOutputStream extends OutputStream {
 
@@ -35,40 +30,7 @@ class UglyTimeoutSocketChannelOutputStream extends OutputStream {
 
   void writeWithTimeout(final ByteBuffer src) throws IOException {
     while (src.hasRemaining()) {
-      writeWithTimeout0(src);
-    }
-  }
-
-  void writeWithTimeout0(final ByteBuffer src) throws IOException {
-    final Thread writer = Thread.currentThread();
-    final var completed = new AtomicBoolean();
-    final ScheduledFuture<?> timeoutFuture =
-        ForkJoinPool.commonPool().schedule(
-            () -> {
-              if (completed.compareAndSet(false, true)) {
-                writer.interrupt();
-              }
-            },
-            TimeUnit.NANOSECONDS.convert(this.timeout),
-            TimeUnit.NANOSECONDS
-        );
-
-    try {
-      this.ch.write(src);
-      if (!completed.compareAndSet(false, true)) {
-        // clear interrupt status in case write op completed normally but timeout task ran between that and the CAS op
-        Thread.interrupted();
-      }
-    } catch (final ClosedByInterruptException ex) {
-      if (!completed.compareAndSet(false, true)) {
-        Thread.interrupted(); // clear interrupt flag in case of read timeout
-        throw new WriteTimeoutException();
-      } else {
-        throw ex;
-      }
-    } finally {
-      completed.set(true);
-      timeoutFuture.cancel(false);
+      NetUtil.writeWithTimeout(this.ch, this.timeout, src);
     }
   }
 }
