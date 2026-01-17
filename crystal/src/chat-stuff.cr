@@ -36,6 +36,7 @@ module Chatty
     end
   end
 
+  # TODO: remove socket from here and move to Connection?
   class Client
     Log = ::Log.for "client"
     getter sign_key : PKey::RSA
@@ -80,6 +81,7 @@ module Chatty
     @client : Client
     @xchg : PKey::X25519
     getter! cipher : CipherStreamIO
+    @counter : Atomic(UInt64) = Atomic.new(1u64)
 
     def initialize(@client)
       @xchg = PKey::X25519.generate
@@ -140,13 +142,19 @@ module Chatty
       Log.notice { "Handshake complete, switching to cipher" }
     end
 
-    def send(t)
-      Log.info { "Sending #{t.inspect}" }
-      io.write_protobuf_sized t
+    def next_id : UInt64
+      @counter.add(1)
     end
 
-    def recv(t : T.class) : T forall T
-      v = io.read_protobuf_sized t
+    # TODO: callback
+    def send(req : Message::Request)
+      req.id = next_id
+      Log.info { "Sending #{req.inspect}" }
+      io.write_protobuf_sized req
+    end
+
+    def recv : Message::Response
+      v = io.read_protobuf_sized Message::Response
       Log.info { "Received #{v.inspect}" }
       v
     end
@@ -159,20 +167,51 @@ module Chatty
   conn = client.connect
   conn.handshake
 
-  req = Message::Request.new
-  msg_out = Message::Keepalive.new
-  req.keepalive = msg_out
-  req.id = 1
-  conn.send req
+  wait_channel = Channel(Nil).new
+  Process.on_terminate do |reason|
+    case reason
+    when .interrupted?
+      Log.warn { "Closing connection with server" }
+      req = Message::Request.new
+      msg_out = Message::Disconnect.new
+      msg_out.reason = "Closing connection"
+      req.disconnect = msg_out
+      conn.send req
+      wait_channel.close
+      client.close
+    else
+      puts "terminating forcefully"
+      Process.exit
+    end
+  end
 
-  msg_in = conn.recv Message::Response
+  spawn(name: "keepalive fiber") do
+    loop do
+      req = Message::Request.new
+      req.keepalive = Message::Keepalive.new
+      conn.send req
+      select
+      when wait_channel.receive?
+        break
+      when timeout(5.seconds)
+        # Loop
+      end
+    end
+  end
 
-  req = Message::Request.new
-  msg_out = Message::Disconnect.new
-  msg_out.reason = "bye"
-  req.disconnect = msg_out
-  req.id = 3
-  conn.send req
+  spawn(name: "reader fiber") do
+    loop do
+      resp = conn.recv
+      # pp! resp
+    rescue err : IO::Error
+      if wait_channel.closed?
+        break
+      else
+        Log.error(exception: err) { "Failed to read" }
+      end
+    end
+  end
 
-  msg_in = conn.recv Message::Response
+  wait_channel.receive?
+  puts "bye"
 end
